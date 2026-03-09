@@ -1,108 +1,104 @@
 # main.py
-# Entry point for the AI Public Transportation Optimization Agent System
+# Entry point for the AI Chronic Disease Management Agent System
 
 import os
 import sys
 import json
-from datetime import datetime
+from datetime import datetime, date
 from dotenv import load_dotenv
 
 load_dotenv()
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from graph.transit_graph import build_transit_graph, get_graph_description
+from graph.care_graph import build_care_graph, get_graph_description
 from data.models import AgentState
-from config.settings import transit_config
+from config.settings import care_config
 
 
 def print_header():
     print("=" * 72)
-    print("  AI PUBLIC TRANSPORTATION OPTIMIZATION SYSTEM")
-    print(f"  Network: {transit_config.network_name}")
-    print(f"  City: {transit_config.city}")
-    print(f"  Bus routes: {', '.join(transit_config.bus_routes)}")
-    print(f"  Metro lines: {', '.join(transit_config.metro_lines)}")
-    print(f"  Fleet: {transit_config.total_buses} buses, "
-          f"{transit_config.total_metro_trains} metro trains")
+    print("  AI CHRONIC DISEASE MANAGEMENT SYSTEM")
+    print(f"  System: {care_config.system_name}")
+    print(f"  Organization: {care_config.organization}")
+    print(f"  Conditions managed: {', '.join(care_config.supported_conditions)}")
     print(f"  Run time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 72)
+    print()
+    print(f"  DISCLAIMER: {care_config.disclaimer}")
+    print()
 
 
-def print_optimization_report(final_state: dict):
-    """Print the formatted transit optimization report."""
-    plan = final_state.get("optimization_plan")
-    if not plan:
-        print("No optimization plan generated.")
+def print_patient_report(final_state: dict):
+    """Print formatted patient monitoring report."""
+    summary = final_state.get("progress_summary")
+    patient = final_state.get("patient")
+
+    if not summary or not patient:
+        print("No summary generated.")
         return
 
-    status = plan.get("network_status", "unknown").upper()
-    status_colors = {
-        "CRITICAL": "[!!]", "DISRUPTED": "[!]",
-        "DEGRADED": "[~]", "NORMAL": "[OK]", "ENHANCED": "[+]"
+    status = summary.get("overall_status", "unknown").upper()
+    status_map = {
+        "EXCELLENT": "[++]", "GOOD": "[+]", "FAIR": "[~]",
+        "POOR": "[-]", "CRITICAL": "[!!]"
     }
-    status_indicator = status_colors.get(status, "[ ]")
+    indicator = status_map.get(status, "[ ]")
 
     print("\n" + "=" * 72)
-    print(f"  TRANSIT OPERATIONS REPORT  {status_indicator} {status}")
+    print(f"  PATIENT MONITORING REPORT  {indicator} {status}")
     print("=" * 72)
-    print(f"  Generated: {plan.get('generated_at', 'N/A')}")
-    print(f"  Planning horizon: {plan.get('planning_horizon_hours')} hours")
+    print(f"  Patient: {patient.get('name')}  |  ID: {patient.get('patient_id')}")
+    print(f"  Age: {patient.get('age')}  |  "
+          f"Conditions: {', '.join(patient.get('conditions', []))}")
+    print(f"  Risk Level: {patient.get('risk_stratification', 'N/A').upper()}")
+    print(f"  Period: {summary.get('period_start')} to {summary.get('period_end')}")
 
-    # KPI projections
-    kpis = plan.get("kpi_projections", {})
-    if kpis:
-        print("\n--- PERFORMANCE METRICS ---")
-        print(f"  On-time performance:   {kpis.get('on_time_performance_before', 0):.1f}% "
-              f"(target: {kpis.get('on_time_performance_target', 85)}%)")
-        print(f"  Overcrowded routes:    {kpis.get('overcrowded_routes_before', 0)} -> "
-              f"{kpis.get('overcrowded_routes_after_projection', 0)} (projected)")
-        print(f"  Vehicles redeployed:   {kpis.get('vehicles_redeployed', 0)}")
-        print(f"  Schedule adjustments:  {kpis.get('total_adjustments', 0)}")
-        print(f"  Alerts published:      {kpis.get('alerts_published', 0)}")
+    # Risk scores
+    risk_scores = final_state.get("risk_scores", [])
+    if risk_scores:
+        print("\n--- RISK SCORES BY DOMAIN ---")
+        for rs in risk_scores:
+            level = rs.get("risk_level", "").upper()
+            score = rs.get("score", 0)
+            bar = "#" * int(score / 10) + "-" * (10 - int(score / 10))
+            print(f"  {rs.get('domain'):20s} [{bar}] {score:.0f}/100  {level}")
 
-    # Schedule adjustments
-    adjustments = plan.get("schedule_adjustments", [])
-    if adjustments:
-        print(f"\n--- SCHEDULE ADJUSTMENTS ({len(adjustments)}) ---")
-        for adj in adjustments:
-            headway_str = f" | headway={adj.get('new_headway_minutes')}min" if adj.get("new_headway_minutes") else ""
-            vehicles_str = ""
-            if adj.get("vehicles_added"):
-                vehicles_str += f" +{adj.get('vehicles_added')}v"
-            if adj.get("vehicles_removed"):
-                vehicles_str += f" -{adj.get('vehicles_removed')}v"
-            print(f"  {adj.get('route_id')} [{adj.get('route_type')}]: "
-                  f"{adj.get('adjustment_type')}{headway_str}{vehicles_str} "
-                  f"| [{adj.get('priority', 'normal').upper()}]")
+    # Interventions executed
+    interventions = final_state.get("interventions", [])
+    if interventions:
+        print(f"\n--- INTERVENTIONS EXECUTED ({len(interventions)}) ---")
+        for inv in interventions:
+            sev = inv.get("severity", "info").upper()
+            print(f"  [{sev}] {inv.get('intervention_type')} -> {inv.get('recipient')}")
+            print(f"    {inv.get('title')}")
 
-    # Fleet deployments
-    deployments = plan.get("fleet_deployments", [])
-    if deployments:
-        print(f"\n--- FLEET REDEPLOYMENTS ({len(deployments)}) ---")
-        for dep in deployments:
-            sources = ", ".join(dep.get("source_routes", []))
-            print(f"  -> {dep.get('route_id')}: +{dep.get('vehicles_to_add')} vehicles "
-                  f"from [{sources}]")
+    # Care plan recommendations
+    care_plan = final_state.get("care_plan_adjustments", [])
+    if care_plan:
+        print(f"\n--- CARE PLAN RECOMMENDATIONS PENDING PHYSICIAN REVIEW ({len(care_plan)}) ---")
+        for adj in care_plan:
+            print(f"  [{adj.get('urgency', 'routine').upper()}] "
+                  f"{adj.get('adjustment_type')}")
+            print(f"    -> {adj.get('recommended_change', '')[:100]}")
 
-    # Service alerts
-    alerts = plan.get("service_alerts", [])
-    if alerts:
-        print(f"\n--- PASSENGER ALERTS PUBLISHED ({len(alerts)}) ---")
-        for alert in alerts:
-            print(f"  [{alert.get('severity', 'info').upper()}] {alert.get('headline')}")
-            print(f"    Routes: {alert.get('affected_routes')} | "
-                  f"Channels: {alert.get('channels')}")
+    # Emergency status
+    if final_state.get("emergency_triggered"):
+        print("\n  !!! EMERGENCY PROTOCOLS WERE ACTIVATED THIS CYCLE !!!")
+        print("  Emergency contact and EMS have been notified.")
+        print("  Physician was paged STAT.")
 
-    # Executive summary
-    print("\n--- OPERATIONS SUMMARY ---")
-    print(plan.get("summary", "No summary available"))
+    # Summary narrative
+    print("\n--- CLINICAL SUMMARY ---")
+    print(summary.get("narrative", "No narrative generated."))
+
     print("\n" + "=" * 72)
 
 
 def save_report(final_state: dict, filename: str = None) -> str:
-    """Save the optimization report to JSON."""
+    """Save monitoring report to JSON."""
     if not filename:
-        filename = f"transit_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        patient_id = final_state.get("patient", {}).get("patient_id", "unknown")
+        filename = f"care_report_{patient_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
 
     with open(filename, "w") as f:
         json.dump(final_state, f, indent=2, default=str)
@@ -111,25 +107,25 @@ def save_report(final_state: dict, filename: str = None) -> str:
     return filename
 
 
-def run_optimization_cycle():
-    """Execute a single transit optimization cycle."""
+def run_monitoring_cycle(patient_id: str = "P001"):
+    """Execute a single chronic disease monitoring cycle for a patient."""
     print_header()
 
-    if not transit_config.openai_api_key:
-        print("\nERROR: OPENAI_API_KEY not set.")
+    if not care_config.openai_api_key:
+        print("ERROR: OPENAI_API_KEY not set.")
         print("Create a .env file with: OPENAI_API_KEY=sk-your-key-here")
         sys.exit(1)
 
     print(get_graph_description())
-    print("\nStarting transit optimization cycle...\n")
+    print(f"\nStarting monitoring cycle for patient: {patient_id}")
     print("-" * 72)
 
-    graph = build_transit_graph()
+    graph = build_care_graph()
     initial_state = AgentState().model_dump()
 
     config = {
         "configurable": {
-            "thread_id": f"transit-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+            "thread_id": f"care-{patient_id}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
         }
     }
 
@@ -141,11 +137,11 @@ def run_optimization_cycle():
                 final_state = state
 
     except Exception as e:
-        print(f"\nERROR during execution: {e}")
+        print(f"\nERROR: {e}")
         raise
 
     if final_state:
-        print_optimization_report(final_state)
+        print_patient_report(final_state)
         save_report(final_state)
         return final_state
     else:
@@ -154,4 +150,6 @@ def run_optimization_cycle():
 
 
 if __name__ == "__main__":
-    run_optimization_cycle()
+    # Run for Patient P001 (Margaret Chen - T2DM + HTN + CKD)
+    # To run for P002 (Thomas Rivera - Heart Failure), change to "P002"
+    run_monitoring_cycle(patient_id="P001")

@@ -1,201 +1,204 @@
-# AI Public Transportation Optimization Agent System
+# AI Chronic Disease Management Agent System
 
-An agentic AI system built with LangGraph and LangChain that continuously monitors
-passenger demand, traffic conditions, and scheduled events to dynamically adjust
-bus and metro schedules in real time.
+An agentic AI system built with LangGraph and LangChain that continuously monitors patient
+lifestyle data, medication adherence, and symptoms to provide proactive, evidence-based
+health interventions for patients with chronic conditions.
 
-## Architecture Overview
+---
 
-Seven specialized agents collaborate via a shared LangGraph StateGraph:
+## Data Sources
+
+This system ingests data from six distinct real-world source categories:
+
+| Agent | Data Type | Production Source | Frequency |
+|-------|-----------|-------------------|-----------|
+| Vitals Agent | Heart rate, SpO2, HRV, steps, sleep | Apple HealthKit, Google Health Connect, Fitbit API, Garmin Connect | Every 5 min (HR/SpO2), hourly (aggregates) |
+| Glucose Agent | Continuous glucose readings, TIR, trend | Dexcom Share API (G6/G7), Abbott LibreLink (FreeStyle Libre 3) | Every 5 minutes (CGM standard) |
+| BP Agent | Systolic/diastolic BP, pulse, AF detection | Omron Connect API, Withings Health API, iHealth API | 1-3x daily (patient-initiated per protocol) |
+| Medication Agent | Dose timestamps, taken/missed, late doses | Medisafe API, Hero Health (smart dispenser), SureScripts (refill) | Event-driven + hourly check |
+| Symptom & Lab Agent | Patient-reported symptoms, HbA1c, eGFR, BNP, electrolytes | Epic MyChart app, Twilio IVR, HL7 FHIR R4 (Epic/Cerner), Quest/LabCorp APIs | Twice daily (symptoms), event-driven (labs) |
+| Intervention Agent | Executes notifications, EHR alerts, emergency responses | Twilio SMS/voice, Firebase FCM, Epic In-Basket, PagerDuty | Real-time (triggered by monitoring findings) |
+
+All data in this codebase is **fully simulated** with clinically realistic ranges.
+HIPAA compliance requires a BAA with all production data vendors.
+
+---
+
+## Agent Graph Architecture
 
 ```
-[SUPERVISOR] (init)
+[SUPERVISOR] (load patient profile from EHR)
       |
       v
-[DEMAND AGENT] --> [TRAFFIC AGENT] --> [EVENT AGENT] --> [FLEET AGENT]
-                                                               |
-                                                               v
-                                                   [SCHEDULE OPTIMIZER]
-                                                               |
-                                                               v
-                                                        [ALERT AGENT]
-                                                               |
-                                                               v
-                                                  [SUPERVISOR] (synthesis)
-                                                               |
-                                                               v
-                                                             END
+[VITALS AGENT]       -- wearable: HR, SpO2, HRV, sleep, activity
+      |
+      v
+[GLUCOSE AGENT]      -- CGM: glucose mg/dL, trend arrows, time-in-range
+      |
+      v
+[BP AGENT]           -- home BP monitor: systolic/diastolic, 7-day average, AF flag
+      |
+      v
+[MEDICATION AGENT]   -- smart dispenser/app: 14-day dose history, pattern analysis
+      |
+      v
+[SYMPTOM & LAB AGENT]-- patient app: self-reported symptoms + EHR lab results
+      |
+      v
+[INTERVENTION AGENT] -- executes targeted interventions via LangChain tool calls
+      |
+      v
+[SUPERVISOR]         -- synthesizes progress summary, files EHR note
+      |
+      v
+    [END]
 ```
 
-## Agent Descriptions
+---
 
-### Supervisor Agent
-Entry point and final synthesizer. Routes the graph to the first monitoring agent,
-then waits for all agents to complete before producing the final operations report
-and computing the network status (CRITICAL / DISRUPTED / DEGRADED / NORMAL / ENHANCED).
+## Intervention Escalation Framework
 
-### Demand Monitoring Agent
-- Reads Automated Passenger Counter (APC) and fare system data
-- Computes load factors for every bus and metro route
-- Flags overcrowded routes (>90% capacity) and underutilized ones (<30%)
-- Computes demand index: current ridership vs historical baseline
-- Forecasts demand 1-3 hours ahead for proactive scheduling
+The system applies a four-tier escalation model:
 
-### Traffic Monitoring Agent
-- Reads traffic management API data for all bus corridors
-- Calculates schedule deviation (extra minutes) per corridor
-- Identifies active incidents: accidents, road works, event closures, weather
-- Assesses compound risk: heavy traffic + overcrowding scenarios
-- Metro lines are unaffected by road traffic but monitored for platform crowding
+| Level | Trigger Examples | Actions Taken |
+|-------|-----------------|---------------|
+| Emergency | Glucose < 54 mg/dL with symptoms, SBP > 180 + chest pain, SpO2 < 88% with acute dyspnea | EMS alert, emergency contact call, physician STAT page, EHR emergency flag |
+| Urgent | SBP consistently >= 180, glucose > 350, new arrhythmia, fall reported, BNP > 500 | Physician/care coordinator urgent alert + patient notification |
+| Care Coordination | HbA1c >= 9%, eGFR < 30, adherence < 50% for critical meds, LDL > 100 on max statin | EHR task for physician review, coordinator follow-up scheduling |
+| Patient Coaching | Post-meal glucose spikes, activity below target, mild symptoms, sleep disruption | In-app nudge, SMS reminder, educational content, motivational message |
 
-### Event Impact Agent
-- Reads the events calendar for the planning horizon (default 6 hours)
-- Estimates transit demand per event based on attendance and modal share
-- Classifies events by impact: critical (5000+ transit pax), major, moderate
-- Determines demand pattern: pre-event surge, post-event surge, or steady
-- Recommends extra service types (shuttle, express, extended hours)
+---
 
-### Fleet Status Agent
-- Polls AVL/GPS positions and on-time status for all active vehicles
-- Detects bunching (vehicles too close) and gaps (headways too wide)
-- Flags mechanical failures and out-of-service vehicles
-- Monitors driver shift hours to avoid fatigue violations
-- Calculates network-wide on-time performance percentage
+## Supported Chronic Conditions
 
-### Schedule Optimizer Agent
-- Synthesizes all four monitoring analyses in a single pass
-- Uses LangChain `bind_tools()` with an agentic loop (up to 3 rounds) for:
-  - `adjust_route_frequency`: Change headways, deploy or recall vehicles
-  - `deploy_extra_service`: Add express trips, shuttles, event service
-  - `reallocate_fleet`: Transfer vehicles from underused to overcrowded routes
-- Prioritizes interventions: critical overcrowding first, proactive second, efficiency third
+- **Type 2 Diabetes**: Glycemic monitoring via CGM, HbA1c trending, hypoglycemia detection, medication adherence for oral hypoglycemics
+- **Hypertension**: HBPM trend analysis, hypertensive urgency/emergency detection, antihypertensive adherence
+- **Heart Failure**: Functional decline detection (activity + SpO2), decompensation early warning (weight gain proxy, BNP, edema symptoms), diuretic adherence
+- **COPD**: SpO2 monitoring for exacerbation detection, respiratory rate trending, inhaler adherence
+- **Chronic Kidney Disease**: eGFR monitoring, electrolyte management (hyperkalemia risk with ACE inhibitors), medication dose adjustment flags
 
-### Passenger Alert Agent
-- Generates public-facing service alerts for all significant changes
-- Calibrates severity: critical / major / minor / info
-- Writes channel-appropriate copy: app, website, station displays, social media, SMS
-- Issues positive event service notifications alongside disruption alerts
-- Uses LangChain tool calling to publish via `issue_service_alert`
+---
 
 ## Project Structure
 
 ```
-transit_agents/
-|-- main.py                         # Entry point, runs full optimization cycle
+chronic_care_agents/
+|-- main.py                          # Entry point, runs full monitoring cycle
 |-- requirements.txt
 |-- .env.example
 |
 |-- config/
-|   |-- settings.py                 # Network config, thresholds, fleet inventory
+|   |-- settings.py                  # Clinical thresholds, system config
 |
 |-- data/
-|   |-- models.py                   # Pydantic models: AgentState, PassengerDemandData, etc.
+|   |-- models.py                    # Pydantic models for all clinical data types
 |
 |-- agents/
-|   |-- supervisor_agent.py         # Graph orchestrator and report synthesizer
-|   |-- demand_agent.py             # Passenger load and ridership monitoring
-|   |-- traffic_agent.py            # Road conditions and schedule adherence
-|   |-- event_agent.py              # Events calendar and demand forecasting
-|   |-- fleet_agent.py              # Vehicle tracking and mechanical status
-|   |-- schedule_optimizer.py       # Schedule adjustments via LangChain tool calls
-|   |-- alert_agent.py              # Passenger communications via tool calls
+|   |-- supervisor_agent.py          # Orchestrator, patient loader, report synthesizer
+|   |-- vitals_agent.py              # Wearable vitals analysis
+|   |-- glucose_agent.py             # CGM glucose analysis
+|   |-- bp_agent.py                  # Home BP monitor analysis
+|   |-- medication_agent.py          # Adherence pattern analysis
+|   |-- symptom_lab_agent.py         # Symptoms + lab result interpretation
+|   |-- intervention_agent.py        # Evidence-based intervention execution
 |
 |-- tools/
-|   |-- sensor_tools.py             # Data collection: demand, traffic, events, fleet
-|   |-- action_tools.py             # Actions: frequency, extra service, alerts, realloc
+|   |-- data_collection_tools.py     # Simulated device/EHR data feeds (6 tools)
+|   |-- intervention_tools.py        # Action tools: notify, alert, recommend, log (5 tools)
 |
 |-- graph/
-|   |-- transit_graph.py            # LangGraph StateGraph definition and compilation
+|   |-- care_graph.py                # LangGraph StateGraph definition
 ```
 
-## Key Data Models
+---
+
+## Clinical Data Models
 
 ```python
-# Core state shared across all agents
 class AgentState(BaseModel):
-    demand_data: list[PassengerDemandData]
-    traffic_data: list[TrafficConditionData]
-    event_data: list[EventData]
-    vehicle_statuses: list[VehicleStatus]
-    
-    demand_analysis: Optional[str]        # From DemandAgent
-    traffic_analysis: Optional[str]       # From TrafficAgent
-    event_analysis: Optional[str]         # From EventAgent
-    fleet_analysis: Optional[str]         # From FleetAgent
-    
-    schedule_adjustments: list[ScheduleAdjustment]   # From Optimizer
-    fleet_deployments: list[FleetDeploymentPlan]     # From Optimizer
-    service_alerts: list[ServiceAlert]               # From AlertAgent
-    
-    optimization_plan: Optional[TransitOptimizationSchedule]  # From Supervisor
-    current_agent: str                    # LangGraph routing control
+    # Patient
+    patient: Optional[PatientProfile]
+
+    # Device data (populated by monitoring agents)
+    vitals_readings: list[WearableVitalsReading]    # from Apple Watch / Fitbit
+    glucose_readings: list[GlucoseReading]           # from Dexcom / Libre
+    bp_readings: list[BloodPressureReading]           # from Omron / Withings
+    medication_records: list[MedicationAdherenceRecord]  # from Medisafe / Hero
+    symptom_reports: list[SymptomReport]             # from patient app / IVR
+    lab_results: list[LabResult]                     # from EHR FHIR
+
+    # Analysis (populated by monitoring agents)
+    vitals_analysis: Optional[str]
+    glucose_analysis: Optional[str]
+    bp_analysis: Optional[str]
+    medication_analysis: Optional[str]
+    symptom_analysis: Optional[str]
+
+    # Risk scores (computed per domain)
+    risk_scores: list[ClinicalRiskScore]             # glycemic, cardiovascular, medication, overall
+
+    # Interventions (populated by intervention agent)
+    interventions: list[HealthIntervention]
+    care_plan_adjustments: list[CarePlanAdjustment]
+
+    # Final output
+    progress_summary: Optional[PatientProgressSummary]
+    emergency_triggered: bool
 ```
 
-## Setup and Running
+---
 
-### 1. Install dependencies
+## Setup
+
 ```bash
+# Install dependencies
 pip install -r requirements.txt
-```
 
-### 2. Configure environment
-```bash
+# Configure environment
 cp .env.example .env
-# Edit .env and add OPENAI_API_KEY
-```
+# Edit .env and add: OPENAI_API_KEY=sk-your-key-here
 
-### 3. Run optimization cycle
-```bash
+# Run monitoring cycle for Patient P001 (Margaret Chen - T2DM + HTN + CKD)
 python main.py
+
+# To monitor Patient P002 (Thomas Rivera - Heart Failure), edit main.py:
+# run_monitoring_cycle(patient_id="P002")
 ```
 
-## Network Configuration
+---
 
-Edit `config/settings.py` to match your transit network:
+## Clinical Guidelines Referenced
 
-```python
-transit_config = TransitConfig(
-    network_name="City Transit Authority",
-    city="Your City",
-    bus_routes=["B1", "B2", "B3", "B10", "B22"],
-    metro_lines=["Red", "Blue", "Green"],
-    total_buses=120,
-    total_metro_trains=30,
-    bus_capacity=60,
-    metro_capacity=400,
-    overcrowding_threshold=0.90,        # 90% load factor = overcrowded
-    underutilization_threshold=0.30,    # 30% load factor = underused
-    planning_horizon_hours=6,
-    on_time_target_percent=85.0
-)
-```
+- ADA Standards of Medical Care in Diabetes (2024)
+- ACC/AHA Hypertension Guidelines (2017)
+- AHA/ACC Heart Failure Guidelines (2022)
+- KDIGO CKD Clinical Practice Guidelines (2022)
+- AGS/BGS Clinical Practice Guideline for Prevention of Falls in Older Persons
 
-## Production Integration
+---
 
-Replace simulated tool implementations with real data sources:
+## Safety and Ethics
 
-| Tool | Production Data Source |
-|------|----------------------|
-| `fetch_passenger_demand` | AFC system API, APC sensor aggregator |
-| `fetch_traffic_conditions` | Traffic management centre API, HERE/TomTom |
-| `fetch_events_calendar` | City events permit API, venue ticketing systems |
-| `fetch_fleet_status` | AVL/GPS system, CAD software API |
-| `adjust_route_frequency` | CAD dispatch system API |
-| `deploy_extra_service` | Crew management system + CAD |
-| `issue_service_alert` | GTFS-RT alert feed, CMS for displays, Twilio for SMS |
+This system is **decision support only**. It does not replace clinical judgment.
 
-## Continuous Operation
+- All care plan recommendations require physician review and approval before implementation
+- Emergency interventions trigger human escalation — the AI does not autonomously call emergency services in production without human-in-the-loop validation
+- All automated notes filed to the EHR require cosignature by a supervising clinician
+- Patient notifications are written in plain language and are never alarmist
+- The system does not prescribe medications or specific dosages
+- All monitoring data is subject to HIPAA and applicable data protection regulations
 
-To run as a continuously monitoring system:
+---
 
-```python
-import time
-from main import run_optimization_cycle
+## Production Deployment Checklist
 
-while True:
-    run_optimization_cycle()
-    time.sleep(300)  # Re-optimize every 5 minutes
-```
-
-For production, use a proper scheduler (APScheduler, Celery beat, cron)
-with database-backed state persistence and alerting on agent failures.
+- [ ] Execute BAA (Business Associate Agreement) with all data vendors
+- [ ] HL7 FHIR R4 integration with EHR (Epic / Cerner sandbox testing)
+- [ ] Device API integrations with OAuth2 (Apple HealthKit, Fitbit, Dexcom)
+- [ ] HIPAA-compliant audit logging database (not in-memory)
+- [ ] Human-in-the-loop review for all emergency escalations
+- [ ] Clinical validation of AI-generated recommendations by physician panel
+- [ ] IRB review if used in research context
+- [ ] FDA SaMD (Software as a Medical Device) regulatory pathway assessment
+- [ ] Patient consent and data sharing agreements
+- [ ] Bias audit across demographic groups
