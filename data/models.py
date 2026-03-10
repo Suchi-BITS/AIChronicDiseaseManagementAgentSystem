@@ -1,8 +1,9 @@
 # data/models.py
-# Pydantic data models for the chronic disease management system
+# All models use stdlib dataclasses — no pydantic required.
+# dict-based AgentState is used directly by LangGraph.
 
-from pydantic import BaseModel, Field
-from typing import Optional, Literal
+from dataclasses import dataclass, field
+from typing import Optional, List, Dict, Any
 from datetime import datetime, date
 
 
@@ -10,249 +11,192 @@ from datetime import datetime, date
 # Patient profile
 # ---------------------------------------------------------------------------
 
-class PatientProfile(BaseModel):
-    """Demographic and clinical profile for a monitored patient."""
+@dataclass
+class PatientProfile:
     patient_id: str
     name: str
     age: int
-    sex: Literal["male", "female", "other"]
-    conditions: list[str]                   # Active chronic conditions
-    medications: list[dict]                 # {name, dose, frequency, route}
-    care_team: dict                         # {primary_physician, care_coordinator, specialist}
+    sex: str                        # "male" | "female" | "other"
+    conditions: List[str]
+    medications: List[Dict]         # {name, dose, frequency, route}
+    care_team: Dict                 # {primary_physician, care_coordinator, specialist}
     emergency_contact: str
-    preferences: dict = Field(default_factory=dict)  # notification preferences
-    enrolled_since: date
-    risk_stratification: Literal["low", "moderate", "high", "very_high"] = "moderate"
+    enrolled_since: str             # ISO date string
+    risk_stratification: str = "moderate"   # low | moderate | high | very_high
+    preferences: Dict = field(default_factory=dict)
+
+    def to_dict(self):
+        return self.__dict__.copy()
+
+    @classmethod
+    def from_dict(cls, d: dict):
+        return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
 
 
 # ---------------------------------------------------------------------------
-# Raw data from device/sensor sources
+# Raw device readings — each stored as plain dicts in AgentState lists
+# (avoids any serialization complexity with LangGraph's dict-based state)
 # ---------------------------------------------------------------------------
 
-class WearableVitalsReading(BaseModel):
-    """Data from a connected wearable device (smartwatch, fitness tracker)."""
-    timestamp: datetime = Field(default_factory=datetime.now)
-    patient_id: str
-    device_type: str                        # e.g., "Apple Watch Series 9"
-    heart_rate_bpm: float
-    heart_rate_variability_ms: Optional[float] = None
-    spo2_percent: Optional[float] = None
-    respiratory_rate_rpm: Optional[float] = None
-    steps_today: int = 0
-    active_minutes_today: int = 0
-    calories_burned: Optional[float] = None
-    sleep_hours_last_night: Optional[float] = None
-    sleep_quality_score: Optional[float] = None   # 0-100
-    stress_score: Optional[float] = None          # 0-100
+def make_wearable_reading(patient_id: str, heart_rate_bpm: float, spo2_percent: float,
+                           hrv_ms: float, steps: int, active_minutes: int,
+                           sleep_hours: Optional[float], sleep_quality: Optional[float],
+                           stress_score: float, respiratory_rate: float,
+                           device_type: str = "Apple Watch Series 9") -> dict:
+    return {
+        "type": "wearable",
+        "timestamp": datetime.now().isoformat(),
+        "patient_id": patient_id,
+        "device_type": device_type,
+        "heart_rate_bpm": round(heart_rate_bpm, 1),
+        "heart_rate_variability_ms": round(hrv_ms, 1),
+        "spo2_percent": round(spo2_percent, 1),
+        "respiratory_rate_rpm": round(respiratory_rate, 1),
+        "steps_today": steps,
+        "active_minutes_today": active_minutes,
+        "sleep_hours_last_night": round(sleep_hours, 1) if sleep_hours else None,
+        "sleep_quality_score": round(sleep_quality, 0) if sleep_quality else None,
+        "stress_score": round(stress_score, 0),
+    }
 
 
-class GlucoseReading(BaseModel):
-    """Continuous glucose monitor (CGM) reading."""
-    timestamp: datetime = Field(default_factory=datetime.now)
-    patient_id: str
-    device_type: str                        # e.g., "Dexcom G7"
-    glucose_mg_dl: float
-    trend: Literal[
-        "rising_rapidly",   # > +2 mg/dL/min
-        "rising",           # +1 to +2 mg/dL/min
-        "stable",           # -1 to +1 mg/dL/min
-        "falling",          # -1 to -2 mg/dL/min
-        "falling_rapidly"   # < -2 mg/dL/min
-    ]
-    in_target_range: bool
-    time_in_range_percent_today: float      # % of readings in 70-180 mg/dL today
+def make_glucose_reading(patient_id: str, glucose_mg_dl: float, trend: str,
+                          tir_percent: float,
+                          device_type: str = "Dexcom G7") -> dict:
+    return {
+        "type": "glucose",
+        "timestamp": datetime.now().isoformat(),
+        "patient_id": patient_id,
+        "device_type": device_type,
+        "glucose_mg_dl": round(glucose_mg_dl, 1),
+        "trend": trend,
+        "in_target_range": 70 <= glucose_mg_dl <= 180,
+        "time_in_range_percent_today": round(tir_percent, 1),
+    }
 
 
-class BloodPressureReading(BaseModel):
-    """Connected blood pressure cuff reading."""
-    timestamp: datetime = Field(default_factory=datetime.now)
-    patient_id: str
-    device_type: str                        # e.g., "Omron Evolv"
-    systolic_mmhg: float
-    diastolic_mmhg: float
-    pulse_bpm: float
-    irregular_heartbeat_detected: bool = False
-    arm: Literal["left", "right"] = "left"
-    body_position: Literal["sitting", "standing", "lying"] = "sitting"
+def make_bp_reading(patient_id: str, systolic: float, diastolic: float, pulse: float,
+                     irregular: bool = False,
+                     device_type: str = "Omron Evolv") -> dict:
+    return {
+        "type": "blood_pressure",
+        "timestamp": datetime.now().isoformat(),
+        "patient_id": patient_id,
+        "device_type": device_type,
+        "systolic_mmhg": round(systolic, 0),
+        "diastolic_mmhg": round(diastolic, 0),
+        "pulse_bpm": round(pulse, 0),
+        "irregular_heartbeat_detected": irregular,
+        "arm": "left",
+        "body_position": "sitting",
+    }
 
 
-class MedicationAdherenceRecord(BaseModel):
-    """Medication adherence data from smart pill dispenser or app."""
-    patient_id: str
-    medication_name: str
-    scheduled_dose_time: datetime
-    taken_time: Optional[datetime] = None
-    taken: bool
-    dose_mg: float
-    method: Literal["pill", "injection", "inhaler", "patch", "liquid"]
-    source: Literal["smart_dispenser", "patient_app", "caregiver_log", "pharmacy_refill"]
-    notes: Optional[str] = None
+def make_medication_record(patient_id: str, medication_name: str, scheduled_iso: str,
+                             taken: bool, taken_iso: Optional[str], dose_mg: float,
+                             method: str = "pill", source: str = "smart_dispenser") -> dict:
+    return {
+        "type": "medication",
+        "patient_id": patient_id,
+        "medication_name": medication_name,
+        "scheduled_dose_time": scheduled_iso,
+        "taken_time": taken_iso,
+        "taken": taken,
+        "dose_mg": dose_mg,
+        "method": method,
+        "source": source,
+    }
 
 
-class SymptomReport(BaseModel):
-    """Patient-reported symptom data via mobile app or IVR call."""
-    timestamp: datetime = Field(default_factory=datetime.now)
-    patient_id: str
-    reporting_method: Literal["mobile_app", "web_portal", "phone_ivr", "nurse_call"]
-    symptoms: list[dict] = Field(
-        description="List of {symptom_name, severity_1_to_10, duration_hours, notes}"
-    )
-    pain_scale: Optional[int] = Field(None, ge=0, le=10)
-    fatigue_scale: Optional[int] = Field(None, ge=0, le=10)
-    mood_scale: Optional[int] = Field(None, ge=1, le=10)
-    fell_today: bool = False
-    visited_er_since_last_check: bool = False
-    free_text: Optional[str] = None
+def make_symptom_report(patient_id: str, symptoms: List[dict], pain_scale: int,
+                          fatigue_scale: int, mood_scale: int,
+                          fell_today: bool = False,
+                          visited_er: bool = False,
+                          free_text: Optional[str] = None,
+                          method: str = "mobile_app") -> dict:
+    return {
+        "type": "symptom_report",
+        "timestamp": datetime.now().isoformat(),
+        "patient_id": patient_id,
+        "reporting_method": method,
+        "symptoms": symptoms,
+        "pain_scale": pain_scale,
+        "fatigue_scale": fatigue_scale,
+        "mood_scale": mood_scale,
+        "fell_today": fell_today,
+        "visited_er_since_last_check": visited_er,
+        "free_text": free_text,
+    }
 
 
-class LabResult(BaseModel):
-    """Laboratory test result from EHR / FHIR integration."""
-    result_date: date
-    patient_id: str
-    lab_name: str
-    ordered_by: str
-    results: dict = Field(
-        description="Dict of {test_name: {value, unit, reference_range, flag}}"
-    )
-    # Key markers stored explicitly for fast access
-    hba1c_percent: Optional[float] = None
-    creatinine_mg_dl: Optional[float] = None
-    egfr_ml_min: Optional[float] = None
-    cholesterol_total_mg_dl: Optional[float] = None
-    ldl_mg_dl: Optional[float] = None
-    hdl_mg_dl: Optional[float] = None
-    potassium_meq_l: Optional[float] = None
-    sodium_meq_l: Optional[float] = None
-    bnp_pg_ml: Optional[float] = None     # B-type natriuretic peptide (heart failure marker)
-
-
-# ---------------------------------------------------------------------------
-# Analysis outputs
-# ---------------------------------------------------------------------------
-
-class ClinicalRiskScore(BaseModel):
-    """Composite risk score generated by a monitoring agent."""
-    patient_id: str
-    domain: Literal["glycemic", "cardiovascular", "renal", "respiratory", "medication", "overall"]
-    score: float = Field(ge=0.0, le=100.0)
-    risk_level: Literal["low", "moderate", "high", "critical"]
-    contributing_factors: list[str]
-    trend: Literal["improving", "stable", "worsening"]
-    timestamp: datetime = Field(default_factory=datetime.now)
-
-
-class HealthIntervention(BaseModel):
-    """A proactive health intervention recommended or executed by an agent."""
-    intervention_id: str
-    patient_id: str
-    intervention_type: Literal[
-        "in_app_nudge",
-        "educational_content",
-        "medication_reminder",
-        "lifestyle_coaching",
-        "care_coordinator_alert",
-        "physician_alert",
-        "medication_adjustment_recommendation",
-        "emergency_alert",
-        "appointment_recommendation",
-        "lab_order_recommendation"
-    ]
-    severity: Literal["info", "warning", "urgent", "emergency"]
-    title: str
-    message: str
-    action_required: str
-    recipient: Literal["patient", "care_coordinator", "physician", "emergency_services"]
-    delivery_channel: list[str]     # e.g., ["push_notification", "sms", "ehr_alert"]
-    clinical_basis: str             # What data triggered this intervention
-    evidence_based_guideline: Optional[str] = None
-    timestamp: datetime = Field(default_factory=datetime.now)
-    requires_acknowledgment: bool = False
-    follow_up_hours: Optional[int] = None
-
-
-class CarePlanAdjustment(BaseModel):
-    """Recommended adjustment to a patient's care plan."""
-    patient_id: str
-    adjustment_type: Literal[
-        "medication_dose_change",
-        "new_medication_recommendation",
-        "medication_discontinuation",
-        "lifestyle_goal_update",
-        "monitoring_frequency_change",
-        "specialist_referral",
-        "lab_order",
-        "appointment_scheduling"
-    ]
-    current_state: str
-    recommended_change: str
-    clinical_rationale: str
-    evidence_level: Literal["guideline_based", "clinical_judgment", "patient_preference"]
-    urgency: Literal["routine", "soon", "urgent"] = "routine"
-    requires_physician_approval: bool = True
-    estimated_benefit: str
-
-
-class PatientProgressSummary(BaseModel):
-    """Weekly progress summary for patient and care team."""
-    patient_id: str
-    period_start: date
-    period_end: date
-    overall_status: Literal["excellent", "good", "fair", "poor", "critical"]
-    glycemic_control_summary: Optional[str] = None
-    bp_control_summary: Optional[str] = None
-    medication_adherence_summary: str = ""
-    activity_summary: str = ""
-    symptom_summary: str = ""
-    risk_scores: list[ClinicalRiskScore] = Field(default_factory=list)
-    key_achievements: list[str] = Field(default_factory=list)
-    areas_of_concern: list[str] = Field(default_factory=list)
-    goals_for_next_week: list[str] = Field(default_factory=list)
-    narrative: str = ""
+def make_lab_result(patient_id: str, lab_name: str, ordered_by: str,
+                     result_date_str: str, results: dict,
+                     hba1c: Optional[float] = None,
+                     creatinine: Optional[float] = None,
+                     egfr: Optional[float] = None,
+                     ldl: Optional[float] = None,
+                     potassium: Optional[float] = None,
+                     sodium: Optional[float] = None,
+                     bnp: Optional[float] = None) -> dict:
+    return {
+        "type": "lab_result",
+        "result_date": result_date_str,
+        "patient_id": patient_id,
+        "lab_name": lab_name,
+        "ordered_by": ordered_by,
+        "results": results,
+        "hba1c_percent": hba1c,
+        "creatinine_mg_dl": creatinine,
+        "egfr_ml_min": egfr,
+        "ldl_mg_dl": ldl,
+        "potassium_meq_l": potassium,
+        "sodium_meq_l": sodium,
+        "bnp_pg_ml": bnp,
+    }
 
 
 # ---------------------------------------------------------------------------
-# LangGraph shared state
+# AgentState — plain dict passed through LangGraph
+# All list values are plain Python lists of dicts.
 # ---------------------------------------------------------------------------
 
-class AgentState(BaseModel):
+def make_agent_state() -> dict:
     """
-    Shared state flowing through the LangGraph agent graph.
-    Every monitoring and intervention agent reads from and writes to this.
+    Create the initial empty AgentState dict.
+    LangGraph uses dict-based state natively — no Pydantic required.
     """
-    # Patient context
-    patient: Optional[PatientProfile] = None
+    return {
+        # Patient profile (dict)
+        "patient": None,
 
-    # Raw device / sensor data
-    vitals_readings: list[WearableVitalsReading] = Field(default_factory=list)
-    glucose_readings: list[GlucoseReading] = Field(default_factory=list)
-    bp_readings: list[BloodPressureReading] = Field(default_factory=list)
-    medication_records: list[MedicationAdherenceRecord] = Field(default_factory=list)
-    symptom_reports: list[SymptomReport] = Field(default_factory=list)
-    lab_results: list[LabResult] = Field(default_factory=list)
+        # Raw device/sensor data — lists of dicts
+        "vitals_readings": [],       # from wearable (Apple Watch, Fitbit, etc.)
+        "glucose_readings": [],      # from CGM (Dexcom G7, FreeStyle Libre 3)
+        "bp_readings": [],           # from BP monitor (Omron, Withings)
+        "medication_records": [],    # from smart dispenser / Medisafe app
+        "symptom_reports": [],       # from patient app / IVR call
+        "lab_results": [],           # from EHR FHIR (Epic/Cerner) / Quest / LabCorp
 
-    # Analysis from monitoring agents
-    vitals_analysis: Optional[str] = None
-    glucose_analysis: Optional[str] = None
-    bp_analysis: Optional[str] = None
-    medication_analysis: Optional[str] = None
-    symptom_analysis: Optional[str] = None
-    lab_analysis: Optional[str] = None
+        # Domain analyses — strings produced by monitoring agents
+        "vitals_analysis": None,
+        "glucose_analysis": None,
+        "bp_analysis": None,
+        "medication_analysis": None,
+        "symptom_analysis": None,
 
-    # Risk scores computed by agents
-    risk_scores: list[ClinicalRiskScore] = Field(default_factory=list)
+        # Risk scores — list of dicts {domain, score, risk_level, factors, trend}
+        "risk_scores": [],
 
-    # Outputs from planning/intervention agents
-    interventions: list[HealthIntervention] = Field(default_factory=list)
-    care_plan_adjustments: list[CarePlanAdjustment] = Field(default_factory=list)
+        # Intervention outputs — list of dicts
+        "interventions": [],
+        "care_plan_adjustments": [],
 
-    # Final consolidated output
-    progress_summary: Optional[PatientProgressSummary] = None
+        # Final progress summary (dict)
+        "progress_summary": None,
 
-    # Control flow
-    current_agent: str = "supervisor"
-    iteration_count: int = 0
-    errors: list[str] = Field(default_factory=list)
-    emergency_triggered: bool = False
-
-    class Config:
-        arbitrary_types_allowed = True
+        # Control flow
+        "current_agent": "supervisor",
+        "iteration_count": 0,
+        "emergency_triggered": False,
+        "errors": [],
+    }
