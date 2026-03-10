@@ -1,155 +1,163 @@
-# main.py
-# Entry point for the AI Chronic Disease Management Agent System
+#!/usr/bin/env python3
+"""
+AI Chronic Disease Management Agent System
+==========================================
+Run:  python main.py            (demo mode — no API key needed)
+Run:  python main.py P002       (run for Thomas Rivera — heart failure patient)
+Set OPENAI_API_KEY in .env for live LLM reasoning.
+"""
 
-import os
 import sys
+import os
 import json
-from datetime import datetime, date
-from dotenv import load_dotenv
+from datetime import datetime
 
-load_dotenv()
+# Ensure project root is on path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from graph.care_graph import build_care_graph, get_graph_description
-from data.models import AgentState
+from data.models import make_agent_state
+from data.simulation import PATIENTS
 from config.settings import care_config
 
 
-def print_header():
-    print("=" * 72)
-    print("  AI CHRONIC DISEASE MANAGEMENT SYSTEM")
-    print(f"  System: {care_config.system_name}")
-    print(f"  Organization: {care_config.organization}")
-    print(f"  Conditions managed: {', '.join(care_config.supported_conditions)}")
-    print(f"  Run time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print("=" * 72)
-    print()
-    print(f"  DISCLAIMER: {care_config.disclaimer}")
-    print()
+SEPARATOR = "=" * 72
 
 
-def print_patient_report(final_state: dict):
-    """Print formatted patient monitoring report."""
-    summary = final_state.get("progress_summary")
-    patient = final_state.get("patient")
+def print_header(patient_id: str):
+    p = PATIENTS.get(patient_id, PATIENTS["P001"])
+    print(SEPARATOR)
+    print(f"  {care_config.system_name}  —  {care_config.organization}")
+    print(f"  Run time : {datetime.now().strftime('%Y-%m-%d  %H:%M:%S')}")
+    print(f"  Patient  : {p['name']}  (ID: {patient_id})")
+    print(f"  Age      : {p['age']}  |  Sex: {p['sex']}")
+    print(f"  Conditions: {', '.join(p['conditions'])}")
+    print(f"  Risk level: {p['risk_stratification'].upper()}")
+    print(f"  Meds      : {len(p['medications'])} medications")
+    print(SEPARATOR)
+    print(f"\n  NOTE: {care_config.disclaimer}\n")
 
-    if not summary or not patient:
+
+def print_report(final_state: dict):
+    summary = final_state.get("progress_summary", {})
+    if not summary:
         print("No summary generated.")
         return
 
-    status = summary.get("overall_status", "unknown").upper()
-    status_map = {
-        "EXCELLENT": "[++]", "GOOD": "[+]", "FAIR": "[~]",
-        "POOR": "[-]", "CRITICAL": "[!!]"
-    }
-    indicator = status_map.get(status, "[ ]")
+    status   = summary.get("overall_status", "unknown").upper()
+    risk     = summary.get("composite_risk", 0)
+    status_icons = {"EXCELLENT":"[++]","GOOD":"[+]","FAIR":"[~]","POOR":"[-]","CRITICAL":"[!!]"}
+    icon     = status_icons.get(status, "[ ]")
 
-    print("\n" + "=" * 72)
-    print(f"  PATIENT MONITORING REPORT  {indicator} {status}")
-    print("=" * 72)
-    print(f"  Patient: {patient.get('name')}  |  ID: {patient.get('patient_id')}")
-    print(f"  Age: {patient.get('age')}  |  "
-          f"Conditions: {', '.join(patient.get('conditions', []))}")
-    print(f"  Risk Level: {patient.get('risk_stratification', 'N/A').upper()}")
-    print(f"  Period: {summary.get('period_start')} to {summary.get('period_end')}")
+    print(f"\n{SEPARATOR}")
+    print(f"  PATIENT MONITORING REPORT   {icon} {status}   (composite risk: {risk:.0f}/100)")
+    print(SEPARATOR)
 
-    # Risk scores
-    risk_scores = final_state.get("risk_scores", [])
-    if risk_scores:
-        print("\n--- RISK SCORES BY DOMAIN ---")
-        for rs in risk_scores:
-            level = rs.get("risk_level", "").upper()
-            score = rs.get("score", 0)
-            bar = "#" * int(score / 10) + "-" * (10 - int(score / 10))
-            print(f"  {rs.get('domain'):20s} [{bar}] {score:.0f}/100  {level}")
+    # Risk scores table
+    print("\n  RISK SCORES BY DOMAIN:")
+    print(f"  {'Domain':<25} {'Score':>6}   {'Level':<10}  Key factors")
+    print(f"  {'-'*65}")
+    for rs in summary.get("risk_scores", []):
+        bar     = "#" * int(rs["score"] / 10) + "." * (10 - int(rs["score"] / 10))
+        factors = " | ".join(rs["factors"][:2]) if rs["factors"] else "—"
+        print(f"  {rs['domain']:<25} {rs['score']:>5.0f}   [{bar}]  {rs['risk_level'].upper():<8}  {factors[:45]}")
 
-    # Interventions executed
-    interventions = final_state.get("interventions", [])
+    # Interventions
+    interventions = summary.get("interventions", [])
     if interventions:
-        print(f"\n--- INTERVENTIONS EXECUTED ({len(interventions)}) ---")
+        print(f"\n  INTERVENTIONS EXECUTED ({len(interventions)}):")
         for inv in interventions:
-            sev = inv.get("severity", "info").upper()
-            print(f"  [{sev}] {inv.get('intervention_type')} -> {inv.get('recipient')}")
-            print(f"    {inv.get('title')}")
+            sev  = inv.get("severity","info").upper()
+            tag  = {"EMERGENCY":"[!!!]","URGENT":"[!!]","WARNING":"[!]","INFO":"[i]"}.get(sev,"[i]")
+            print(f"    {tag} [{inv.get('type','').replace('_',' ').upper()}] -> {inv.get('recipient','')}")
+            print(f"       {inv.get('title','')}")
+            print(f"       Basis: {inv.get('clinical_basis','')[:80]}")
 
     # Care plan recommendations
-    care_plan = final_state.get("care_plan_adjustments", [])
+    care_plan = summary.get("care_plan_adjustments", [])
     if care_plan:
-        print(f"\n--- CARE PLAN RECOMMENDATIONS PENDING PHYSICIAN REVIEW ({len(care_plan)}) ---")
-        for adj in care_plan:
-            print(f"  [{adj.get('urgency', 'routine').upper()}] "
-                  f"{adj.get('adjustment_type')}")
-            print(f"    -> {adj.get('recommended_change', '')[:100]}")
+        print(f"\n  CARE PLAN RECOMMENDATIONS — PENDING PHYSICIAN REVIEW ({len(care_plan)}):")
+        for i, adj in enumerate(care_plan, 1):
+            urg = adj.get("urgency","routine").upper()
+            print(f"    {i}. [{urg}] {adj.get('change_type','').replace('_',' ').upper()}")
+            print(f"       {adj.get('recommendation','')[:100]}")
+            if adj.get("guideline"):
+                print(f"       Guideline: {adj.get('guideline','')}")
 
-    # Emergency status
-    if final_state.get("emergency_triggered"):
-        print("\n  !!! EMERGENCY PROTOCOLS WERE ACTIVATED THIS CYCLE !!!")
-        print("  Emergency contact and EMS have been notified.")
-        print("  Physician was paged STAT.")
+    # Emergency flag
+    if summary.get("emergency_triggered"):
+        print("\n  !!!  EMERGENCY PROTOCOLS WERE ACTIVATED THIS CYCLE  !!!")
+        print("       Emergency contact, EMS, and physician STAT page were sent.")
 
-    # Summary narrative
-    print("\n--- CLINICAL SUMMARY ---")
-    print(summary.get("narrative", "No narrative generated."))
+    # Full narrative
+    print(f"\n  CLINICAL SUMMARY:")
+    print("-" * 72)
+    for line in summary.get("narrative","").strip().splitlines():
+        print(f"  {line}")
 
-    print("\n" + "=" * 72)
+    print(f"\n{SEPARATOR}\n")
 
 
-def save_report(final_state: dict, filename: str = None) -> str:
-    """Save monitoring report to JSON."""
-    if not filename:
-        patient_id = final_state.get("patient", {}).get("patient_id", "unknown")
-        filename = f"care_report_{patient_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-
-    with open(filename, "w") as f:
+def save_report(final_state: dict, patient_id: str) -> str:
+    fname = f"care_report_{patient_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    with open(fname, "w") as f:
         json.dump(final_state, f, indent=2, default=str)
-
-    print(f"\nReport saved to: {filename}")
-    return filename
+    print(f"  Full report saved to: {fname}")
+    return fname
 
 
 def run_monitoring_cycle(patient_id: str = "P001"):
-    """Execute a single chronic disease monitoring cycle for a patient."""
-    print_header()
+    print_header(patient_id)
 
-    if not care_config.openai_api_key:
-        print("ERROR: OPENAI_API_KEY not set.")
-        print("Create a .env file with: OPENAI_API_KEY=sk-your-key-here")
-        sys.exit(1)
-
-    print(get_graph_description())
-    print(f"\nStarting monitoring cycle for patient: {patient_id}")
-    print("-" * 72)
-
-    graph = build_care_graph()
-    initial_state = AgentState().model_dump()
-
-    config = {
-        "configurable": {
-            "thread_id": f"care-{patient_id}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-        }
-    }
-
-    final_state = None
+    # ---------------------------------------------------------------
+    # Try to import LangGraph. If not installed, run agents directly.
+    # ---------------------------------------------------------------
     try:
-        for step in graph.stream(initial_state, config=config):
+        from graph.care_graph import build_care_graph
+
+        graph      = build_care_graph(patient_id)
+        init_state = make_agent_state()
+        init_state["target_patient_id"] = patient_id
+
+        config = {"configurable": {"thread_id": f"care-{patient_id}-{datetime.now().strftime('%Y%m%d%H%M%S')}"}}
+
+        print("Running agent graph via LangGraph...\n")
+        final_state = None
+        for step in graph.stream(init_state, config=config):
             for node_name, state in step.items():
-                print(f"  Completed node: [{node_name}]")
+                print(f"    Completed node: [{node_name}]")
                 final_state = state
 
-    except Exception as e:
-        print(f"\nERROR: {e}")
-        raise
+    except ImportError:
+        # LangGraph not installed — run the agent pipeline directly
+        print("  LangGraph not installed. Running agent pipeline directly.\n")
+        from agents.all_agents import (
+            run_supervisor, run_vitals_agent, run_glucose_agent,
+            run_bp_agent, run_medication_agent, run_symptom_lab_agent,
+            run_intervention_agent,
+        )
+        state = make_agent_state()
+        state["target_patient_id"] = patient_id
+
+        state = run_supervisor(state)       # init: load patient
+        state = run_vitals_agent(state)
+        state = run_glucose_agent(state)
+        state = run_bp_agent(state)
+        state = run_medication_agent(state)
+        state = run_symptom_lab_agent(state)
+        state = run_intervention_agent(state)
+        state = run_supervisor(state)       # synthesis: generate summary
+        final_state = state
 
     if final_state:
-        print_patient_report(final_state)
-        save_report(final_state)
-        return final_state
+        print_report(final_state)
+        save_report(final_state, patient_id)
     else:
-        print("No final state produced.")
-        return None
+        print("No output generated.")
 
 
 if __name__ == "__main__":
-    # Run for Patient P001 (Margaret Chen - T2DM + HTN + CKD)
-    # To run for P002 (Thomas Rivera - Heart Failure), change to "P002"
-    run_monitoring_cycle(patient_id="P001")
+    patient_id = sys.argv[1] if len(sys.argv) > 1 else "P001"
+    if patient_id not in PATIENTS:
+        print(f"Unknown patient. Available: {list(PATIENTS.keys())}")
+        sys.exit(1)
+    run_monitoring_cycle(patient_id)
