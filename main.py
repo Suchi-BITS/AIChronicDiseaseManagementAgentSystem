@@ -1,163 +1,167 @@
 #!/usr/bin/env python3
-"""
-AI Chronic Disease Management Agent System
-==========================================
-Run:  python main.py            (demo mode — no API key needed)
-Run:  python main.py P002       (run for Thomas Rivera — heart failure patient)
-Set OPENAI_API_KEY in .env for live LLM reasoning.
-"""
+# main.py — AI Chronic Disease Management System v2
+# Architecture: Planner-Executor + Human-in-the-Loop + In-Memory Session Memory
+#
+# Usage:
+#   python main.py                     # P001 single pass
+#   python main.py P002                # P002 single pass
+#   python main.py P001 --passes 3     # 3 monitoring passes (demonstrates memory)
 
-import sys
-import os
-import json
-from datetime import datetime
-
-# Ensure project root is on path
+import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from data.models import make_agent_state
-from data.simulation import PATIENTS
+import time
+from datetime import datetime
 from config.settings import care_config
+from data.simulation import PATIENTS
 
 
-SEPARATOR = "=" * 72
+def make_initial_state(patient_id: str) -> dict:
+    return {
+        "patient_id":          patient_id,
+        "risk_level":          "unknown",
+        "current_agent":       None,
+        "emergency_triggered": False,
+        "vitals_readings":     None,
+        "glucose_readings":    None,
+        "bp_readings":         None,
+        "medication_records":  None,
+        "symptom_reports":     None,
+        "lab_results":         None,
+        "signals":             None,
+        "care_plan":           None,
+        "executed_actions":    [],
+        "queued_for_approval": [],
+        "skipped_actions":     [],
+        "progress_summary":    None,
+    }
 
 
-def print_header(patient_id: str):
-    p = PATIENTS.get(patient_id, PATIENTS["P001"])
-    print(SEPARATOR)
-    print(f"  {care_config.system_name}  —  {care_config.organization}")
-    print(f"  Run time : {datetime.now().strftime('%Y-%m-%d  %H:%M:%S')}")
-    print(f"  Patient  : {p['name']}  (ID: {patient_id})")
-    print(f"  Age      : {p['age']}  |  Sex: {p['sex']}")
-    print(f"  Conditions: {', '.join(p['conditions'])}")
-    print(f"  Risk level: {p['risk_stratification'].upper()}")
-    print(f"  Meds      : {len(p['medications'])} medications")
-    print(SEPARATOR)
-    print(f"\n  NOTE: {care_config.disclaimer}\n")
+def print_report(state: dict, pass_num: int) -> None:
+    from agents.base import _demo_mode
+    from memory.session_memory import get_memory
 
+    patient_id = state.get("patient_id", "P001")
+    patient    = PATIENTS.get(patient_id, {})
+    memory     = get_memory(patient_id)
 
-def print_report(final_state: dict):
-    summary = final_state.get("progress_summary", {})
-    if not summary:
-        print("No summary generated.")
-        return
+    print("\n" + "=" * 70)
+    print(f"  PATIENT MONITORING REPORT — Pass #{pass_num}")
+    print(f"  {care_config.system_name} | {care_config.organization}")
+    print(f"  Patient: {patient.get('name')} | ID: {patient_id}")
+    print(f"  Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    print(f"  Mode: {'DEMO' if _demo_mode() else 'LIVE — GPT-4o'}")
+    print("=" * 70)
 
-    status   = summary.get("overall_status", "unknown").upper()
-    risk     = summary.get("composite_risk", 0)
-    status_icons = {"EXCELLENT":"[++]","GOOD":"[+]","FAIR":"[~]","POOR":"[-]","CRITICAL":"[!!]"}
-    icon     = status_icons.get(status, "[ ]")
+    signals = state.get("signals") or {}
+    print(f"\nRISK LEVEL: {state.get('risk_level','unknown').upper()}")
+    print(f"EMERGENCY:  {state.get('emergency_triggered', False)}")
 
-    print(f"\n{SEPARATOR}")
-    print(f"  PATIENT MONITORING REPORT   {icon} {status}   (composite risk: {risk:.0f}/100)")
-    print(SEPARATOR)
+    alerts = signals.get("alerts", [])
+    warns  = signals.get("warnings", [])
+    if alerts:
+        print(f"\nCLINICAL ALERTS ({len(alerts)}):")
+        for a in alerts:
+            print(f"  {a}")
+    if warns:
+        print(f"\nWARNINGS ({len(warns)}):")
+        for w in warns:
+            print(f"  {w}")
 
-    # Risk scores table
-    print("\n  RISK SCORES BY DOMAIN:")
-    print(f"  {'Domain':<25} {'Score':>6}   {'Level':<10}  Key factors")
-    print(f"  {'-'*65}")
-    for rs in summary.get("risk_scores", []):
-        bar     = "#" * int(rs["score"] / 10) + "." * (10 - int(rs["score"] / 10))
-        factors = " | ".join(rs["factors"][:2]) if rs["factors"] else "—"
-        print(f"  {rs['domain']:<25} {rs['score']:>5.0f}   [{bar}]  {rs['risk_level'].upper():<8}  {factors[:45]}")
+    executed = state.get("executed_actions") or []
+    queued   = state.get("queued_for_approval") or []
+    skipped  = state.get("skipped_actions") or []
+    print(f"\nACTIONS:")
+    print(f"  Executed   : {len(executed)}")
+    print(f"  Approved (HITL) : {sum(1 for a in executed if a.get('dispatched_at'))}")
+    print(f"  Queued (pending): {len(memory.pending_approvals)}")
+    print(f"  Skipped (dedup) : {len(skipped)}")
 
-    # Interventions
-    interventions = summary.get("interventions", [])
-    if interventions:
-        print(f"\n  INTERVENTIONS EXECUTED ({len(interventions)}):")
-        for inv in interventions:
-            sev  = inv.get("severity","info").upper()
-            tag  = {"EMERGENCY":"[!!!]","URGENT":"[!!]","WARNING":"[!]","INFO":"[i]"}.get(sev,"[i]")
-            print(f"    {tag} [{inv.get('type','').replace('_',' ').upper()}] -> {inv.get('recipient','')}")
-            print(f"       {inv.get('title','')}")
-            print(f"       Basis: {inv.get('clinical_basis','')[:80]}")
+    for a in executed:
+        print(f"    [{a.get('urgency','?').upper():9}] "
+              f"{a.get('type','?')} -> {a.get('recipient','?')} "
+              f"via {a.get('channel','?')}")
 
-    # Care plan recommendations
-    care_plan = summary.get("care_plan_adjustments", [])
-    if care_plan:
-        print(f"\n  CARE PLAN RECOMMENDATIONS — PENDING PHYSICIAN REVIEW ({len(care_plan)}):")
-        for i, adj in enumerate(care_plan, 1):
-            urg = adj.get("urgency","routine").upper()
-            print(f"    {i}. [{urg}] {adj.get('change_type','').replace('_',' ').upper()}")
-            print(f"       {adj.get('recommendation','')[:100]}")
-            if adj.get("guideline"):
-                print(f"       Guideline: {adj.get('guideline','')}")
-
-    # Emergency flag
-    if summary.get("emergency_triggered"):
-        print("\n  !!!  EMERGENCY PROTOCOLS WERE ACTIVATED THIS CYCLE  !!!")
-        print("       Emergency contact, EMS, and physician STAT page were sent.")
-
-    # Full narrative
-    print(f"\n  CLINICAL SUMMARY:")
-    print("-" * 72)
-    for line in summary.get("narrative","").strip().splitlines():
+    print(f"\nSESSION MEMORY:")
+    for line in memory.context_summary().split("\n"):
         print(f"  {line}")
 
-    print(f"\n{SEPARATOR}\n")
+    summary = state.get("progress_summary", "")
+    if summary:
+        print("\nPROGRESS SUMMARY:")
+        print("-" * 50)
+        print(summary[:1400])
+
+    print("\n" + "=" * 70)
+    print(f"  {care_config.disclaimer}")
+    print("=" * 70)
 
 
-def save_report(final_state: dict, patient_id: str) -> str:
-    fname = f"care_report_{patient_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-    with open(fname, "w") as f:
-        json.dump(final_state, f, indent=2, default=str)
-    print(f"  Full report saved to: {fname}")
-    return fname
-
-
-def run_monitoring_cycle(patient_id: str = "P001"):
-    print_header(patient_id)
-
-    # ---------------------------------------------------------------
-    # Try to import LangGraph. If not installed, run agents directly.
-    # ---------------------------------------------------------------
+def run_pass(patient_id: str, pass_num: int) -> dict:
     try:
         from graph.care_graph import build_care_graph
-
-        graph      = build_care_graph(patient_id)
-        init_state = make_agent_state()
-        init_state["target_patient_id"] = patient_id
-
-        config = {"configurable": {"thread_id": f"care-{patient_id}-{datetime.now().strftime('%Y%m%d%H%M%S')}"}}
-
-        print("Running agent graph via LangGraph...\n")
-        final_state = None
-        for step in graph.stream(init_state, config=config):
-            for node_name, state in step.items():
-                print(f"    Completed node: [{node_name}]")
-                final_state = state
-
+        graph  = build_care_graph(patient_id)
+        result = graph.invoke(make_initial_state(patient_id))
     except ImportError:
-        # LangGraph not installed — run the agent pipeline directly
-        print("  LangGraph not installed. Running agent pipeline directly.\n")
-        from agents.all_agents import (
-            run_supervisor, run_vitals_agent, run_glucose_agent,
-            run_bp_agent, run_medication_agent, run_symptom_lab_agent,
-            run_intervention_agent,
-        )
-        state = make_agent_state()
-        state["target_patient_id"] = patient_id
+        print("\n[INFO] LangGraph not installed — running agents directly...")
+        from agents.planner_agent  import run_planner
+        from agents.executor_agent import run_executor, approve_pending_actions
+        from agents.reporter_agent import run_reporter
 
-        state = run_supervisor(state)       # init: load patient
-        state = run_vitals_agent(state)
-        state = run_glucose_agent(state)
-        state = run_bp_agent(state)
-        state = run_medication_agent(state)
-        state = run_symptom_lab_agent(state)
-        state = run_intervention_agent(state)
-        state = run_supervisor(state)       # synthesis: generate summary
-        final_state = state
+        state = make_initial_state(patient_id)
+        state = run_planner(state)
+        state = run_executor(state)
+        if not state.get("emergency_triggered"):
+            approve_pending_actions(patient_id, approve_all_routine=True)
+        result = run_reporter(state)
 
-    if final_state:
-        print_report(final_state)
-        save_report(final_state, patient_id)
-    else:
-        print("No output generated.")
+    return result
+
+
+def main():
+    args = sys.argv[1:]
+
+    patient_id = "P001"
+    n_passes   = 1
+
+    for arg in args:
+        if arg in PATIENTS:
+            patient_id = arg
+        elif arg == "--passes" and args.index(arg) + 1 < len(args):
+            try:
+                n_passes = int(args[args.index(arg) + 1])
+            except ValueError:
+                pass
+        elif arg.startswith("--passes="):
+            try:
+                n_passes = int(arg.split("=")[1])
+            except ValueError:
+                pass
+
+    patient = PATIENTS.get(patient_id, {})
+    from agents.base import _demo_mode
+
+    print("=" * 70)
+    print("  AI CHRONIC DISEASE MANAGEMENT SYSTEM v2")
+    print("  Architecture: Planner-Executor + HITL + In-Memory")
+    print(f"  Patient: {patient.get('name')} | ID: {patient_id}")
+    print(f"  Conditions: {', '.join(patient.get('conditions', []))}")
+    print(f"  Mode: {'DEMO (no API key)' if _demo_mode() else 'LIVE — GPT-4o'}")
+    print("=" * 70)
+
+    for i in range(n_passes):
+        if n_passes > 1:
+            print(f"\n{'─' * 70}")
+            print(f"  MONITORING PASS {i + 1} of {n_passes}")
+            print(f"{'─' * 70}")
+
+        result = run_pass(patient_id, i + 1)
+        print_report(result, i + 1)
+
+        if i < n_passes - 1:
+            print(f"\n  [Simulating 6-hour monitoring interval...]\n")
+            time.sleep(0.3)
 
 
 if __name__ == "__main__":
-    patient_id = sys.argv[1] if len(sys.argv) > 1 else "P001"
-    if patient_id not in PATIENTS:
-        print(f"Unknown patient. Available: {list(PATIENTS.keys())}")
-        sys.exit(1)
-    run_monitoring_cycle(patient_id)
+    main()
