@@ -631,13 +631,13 @@ SESSION MEMORY (pass #2):
   Adherence avg : 63.4%
   Interventions : 3 issued this session
 ```
-
+# How to Run
+```
+Clone the repo
+Create venv
+Update .env
+pip install -r requirements.txt
+python main.py
+```
 ---
 
-## Disclaimer
-
-CLINICAL DECISION SUPPORT ONLY. All recommendations produced by this system require
-review by a licensed healthcare provider before implementation. In an emergency,
-call 911 immediately. This system does not replace clinical judgment and is not
-approved as a medical device. Simulation data does not represent actual patient
-conditions.
